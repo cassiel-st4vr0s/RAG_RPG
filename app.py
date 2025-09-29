@@ -2,30 +2,35 @@ import streamlit as st
 from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-
-# from langchain_community.embeddings import HuggingFaceInstructEmbeddings
+from langchain_community.vectorstores import Chroma
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from htmlTemplates import bot_template, user_template, css
 import os
+import logging
 
-# Diretório para o banco de dados vetorial persistente
+# Impressão de logs no terminal
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+# Diretório do banco de dados vetorial
 CHROMA_DB_DIRECTORY = "chroma_db_rpg"
 
 
 def load_llm():
-    """Carrega o modelo Gemini 2.5 Flash via API."""
+    """Carrega o modelo Gemini via API."""
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
-        temperature=0.7,
+        temperature=0.5,
     )
     return llm
 
 
 def get_pdf_text(pdf_files):
+    logging.info(f"Iniciando extração de texto de {len(pdf_files)} arquivos PDF.")
     text = ""
     for pdf_file in pdf_files:
         reader = PdfReader(pdf_file)
@@ -33,62 +38,74 @@ def get_pdf_text(pdf_files):
             page_text = page.extract_text()
             if page_text:
                 text += page_text
+    logging.info(f"Extração de texto concluída. Total de caracteres: {len(text)}")
     return text
 
 
 def get_text_chunks(text):
+    logging.info("Iniciando divisão do texto em chunks.")
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000, chunk_overlap=200, length_function=len
     )
-    return text_splitter.split_text(text)
+    chunks = text_splitter.split_text(text)
+    logging.info(f"Divisão concluída. Número de chunks: {len(chunks)}")
+    return chunks
 
 
 def get_vector_store(text_chunks, embeddings):
+    # Verifica se o diretório existe e se não está vazio
     if os.path.exists(CHROMA_DB_DIRECTORY) and os.listdir(CHROMA_DB_DIRECTORY):
-        st.info("Carregando banco de dados de regras existente...")
+        logging.info("Carregando banco de dados vetorial existente do disco.")
         vector_store = Chroma(
             persist_directory=CHROMA_DB_DIRECTORY, embedding_function=embeddings
         )
     else:
-        st.info("Criando um novo banco de dados de regras...")
+        logging.info("Criando um novo banco de dados vetorial.")
         vector_store = Chroma.from_texts(
             texts=text_chunks,
             embedding=embeddings,
             persist_directory=CHROMA_DB_DIRECTORY,
         )
-
+    logging.info("Banco de dados vetorial pronto.")
     return vector_store
 
 
 def get_conversation_chain(vector_store, llm):
+    logging.info("Criando a cadeia de conversação.")
     memory = ConversationBufferMemory(
         memory_key="chat_history", return_messages=True, output_key="answer"
     )
-    return ConversationalRetrievalChain.from_llm(
+    conversation_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
-        retriever=vector_store.as_retriever(search_kwargs={"k": 8}),
+        retriever=vector_store.as_retriever(
+            search_kwargs={"k": 5}
+        ),  # Aumenta o número de docs recuperados
         memory=memory,
         return_source_documents=True,
     )
+    logging.info("Cadeia de conversação criada com sucesso.")
+    return conversation_chain
 
 
 def handle_user_input(question, mode):
+    # Verifica se a conversa foi iniciada
     if st.session_state.conversation is None:
         st.warning("Por favor, processe um PDF antes de fazer perguntas.")
         return
 
-    final_question = question
+    # Ajusta a temperatura do modelo com base no modo
     if mode == "Consultor de Regras":
+        st.session_state.llm.temperature = 0.2  # Mais determinístico
         final_question = f"Baseado estritamente nas regras fornecidas no contexto, responda a seguinte pergunta: {question}. Cite a regra específica se possível."
     elif mode == "Mestre Guia":
+        st.session_state.llm.temperature = 0.8  # Mais criativo
         final_question = f"Use as regras fornecidas no contexto como inspiração para gerar uma ideia criativa e interessante para um mestre de RPG. Seja descritivo. Pergunta original do usuário: {question}"
 
+    logging.info(f"Processando pergunta no modo '{mode}': {question}")
     response = st.session_state.conversation.invoke({"question": final_question})
     st.session_state.chat_history = response["chat_history"]
 
-    with st.expander("Fontes Consultadas"):
-        st.write(response["source_documents"])
-
+    # Exibição do chat
     for i, message in enumerate(st.session_state.chat_history):
         if i % 2 == 0:
             st.write(
@@ -100,33 +117,40 @@ def handle_user_input(question, mode):
                 bot_template.replace("{{MSG}}", message.content), unsafe_allow_html=True
             )
 
+    # Exibição dos documentos fonte
+    with st.expander("Fontes Consultadas no Livro de Regras"):
+        for doc in response["source_documents"]:
+            st.info(f"Fonte (Página aproximada): {doc.metadata.get('page', 'N/A')}")
+            st.text(f"...{doc.page_content}...")
+    logging.info("Resposta e fontes exibidas para o usuário.")
+
 
 def main():
-    load_dotenv()  # Carrega as variáveis do .env (incluindo a GOOGLE_API_KEY)
+    load_dotenv()
     st.set_page_config(page_title="Mestre de RPG com IA", page_icon=":dragon_face:")
     st.write(css, unsafe_allow_html=True)
 
+    # Inicializa todas as chaves necessárias
     if "conversation" not in st.session_state:
         st.session_state.conversation = None
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = None
+    if "vector_store" not in st.session_state:
+        st.session_state.vector_store = None
 
-    # Carrega o modelo de embedding localmente (só uma vez)
+    # Carrega modelos apenas uma vez
     if "embeddings" not in st.session_state:
         with st.spinner("Carregando modelo de embeddings (pode levar um tempo)..."):
             st.session_state.embeddings = HuggingFaceEmbeddings(
-                model_name="hkunlp/instructor-xl",
+                model_name="hkunlp/instructor-large",  # large para melhor performance de recuperação
                 model_kwargs={"device": "cpu"},
             )
-
-    # Carrega o LLM via API (só uma vez)
     if "llm" not in st.session_state:
         with st.spinner("Conectando ao Mestre... (Google Gemini)"):
             st.session_state.llm = load_llm()
 
     st.header("Mestre de RPG com IA :dragon_face:")
 
-    # Cria a variável 'mode' a partir da seleção do usuário
     mode = st.radio(
         "Escolha o modo do assistente:",
         ("Consultor de Regras", "Mestre Guia"),
@@ -135,7 +159,6 @@ def main():
 
     question = st.text_input("Pergunte sobre as regras ou peça uma ideia ao Mestre:")
     if question:
-        # Passa 'question' E 'mode' para a função
         handle_user_input(question, mode)
 
     with st.sidebar:
@@ -147,15 +170,22 @@ def main():
         if st.button("Processar"):
             if pdf_files:
                 with st.spinner("Analisando os tomos antigos... (Processando PDFs)"):
+                    # Extrair o texto
                     raw_text = get_pdf_text(pdf_files)
+
+                    # Obter os chunks de texto
                     text_chunks = get_text_chunks(raw_text)
-                    vector_store = get_vector_store(
+
+                    # Criar e persistir o vector store no session_state
+                    st.session_state.vector_store = get_vector_store(
                         text_chunks, st.session_state.embeddings
                     )
+
+                    # Criar a cadeia de conversação usando o vector_store do session_state
                     st.session_state.conversation = get_conversation_chain(
-                        vector_store, st.session_state.llm
+                        st.session_state.vector_store, st.session_state.llm
                     )
-                    st.success("Pronto! O conhecimento foi absorvido. Pode perguntar.")
+                    st.success("O conhecimento foi absorvido. Pode perguntar.")
             else:
                 st.warning("Você precisa carregar pelo menos um PDF.")
 
