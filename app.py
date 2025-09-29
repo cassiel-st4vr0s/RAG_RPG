@@ -7,7 +7,8 @@ from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface import HuggingFaceEmbeddings
-from htmlTemplates import bot_template, user_template, css
+
+# from htmlTemplates import bot_template, user_template, css
 import os
 import logging
 
@@ -88,55 +89,48 @@ def get_conversation_chain(vector_store, llm):
 
 
 def handle_user_input(question, mode):
-    # Verifica se a conversa foi iniciada
     if st.session_state.conversation is None:
         st.warning("Por favor, processe um PDF antes de fazer perguntas.")
         return
 
-    # Ajusta a temperatura do modelo com base no modo
     if mode == "Consultor de Regras":
-        st.session_state.llm.temperature = 0.2  # Mais determinístico
+        st.session_state.llm.temperature = 0.2
         final_question = f"Baseado estritamente nas regras fornecidas no contexto, responda a seguinte pergunta: {question}. Cite a regra específica se possível."
     elif mode == "Mestre Guia":
-        st.session_state.llm.temperature = 0.8  # Mais criativo
+        st.session_state.llm.temperature = 0.8
         final_question = f"Use as regras fornecidas no contexto como inspiração para gerar uma ideia criativa e interessante para um mestre de RPG. Seja descritivo. Pergunta original do usuário: {question}"
 
     logging.info(f"Processando pergunta no modo '{mode}': {question}")
+
+    # Adicionamos a pergunta atual ao histórico antes de obter a resposta
+    st.session_state.chat_history.append({"role": "user", "content": question})
+
+    # Invoca a cadeia para obter a resposta do bot
     response = st.session_state.conversation.invoke({"question": final_question})
-    st.session_state.chat_history = response["chat_history"]
 
-    # Exibição do chat
-    for i, message in enumerate(st.session_state.chat_history):
-        if i % 2 == 0:
-            st.write(
-                user_template.replace("{{MSG}}", message.content),
-                unsafe_allow_html=True,
-            )
-        else:
-            st.write(
-                bot_template.replace("{{MSG}}", message.content), unsafe_allow_html=True
-            )
+    # Adiciona a resposta do bot ao histórico
+    bot_response = response["answer"]
+    st.session_state.chat_history.append({"role": "bot", "content": bot_response})
 
-    # Exibição dos documentos fonte
-    with st.expander("Fontes Consultadas no Livro de Regras"):
-        for doc in response["source_documents"]:
-            st.info(f"Fonte (Página aproximada): {doc.metadata.get('page', 'N/A')}")
-            st.text(f"...{doc.page_content}...")
-    logging.info("Resposta e fontes exibidas para o usuário.")
+    # Armazena as fontes para exibição posterior
+    st.session_state.sources = response["source_documents"]
+
+    logging.info("Resposta e fontes recuperadas.")
 
 
 def main():
     load_dotenv()
     st.set_page_config(page_title="Mestre de RPG com IA", page_icon=":dragon_face:")
-    st.write(css, unsafe_allow_html=True)
 
     # Session state
     if "conversation" not in st.session_state:
         st.session_state.conversation = None
     if "chat_history" not in st.session_state:
-        st.session_state.chat_history = None
+        st.session_state.chat_history = []
     if "vector_store" not in st.session_state:
         st.session_state.vector_store = None
+    if "sources" not in st.session_state:
+        st.session_state.sources = None
 
     # Carrega modelos apenas uma vez
     if "embeddings" not in st.session_state:
@@ -151,24 +145,29 @@ def main():
 
     st.header("Mestre de RPG com IA :dragon_face:")
 
-    # Formulario do Chat
-    with st.form("chat_form", clear_on_submit=True):
-        mode = st.radio(
-            "Escolha o modo do assistente:",
-            ("Consultor de Regras", "Mestre Guia"),
-            key="mode_selection",
-        )
-        question = st.text_area(
-            "Sua pergunta:",
-            placeholder="Pergunte sobre as regras ou peça uma ideia ao Mestre...",
-            height=100,
-            key="user_input",
-        )
+    # --- LÓGICA DE EXIBIÇÃO DO CHAT NATIVO ---
+    # 1. Exibe as mensagens existentes do histórico
+    for message in st.session_state.chat_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-        submitted = st.form_submit_button("Enviar")
+    # 2. Aguarda por um novo input do usuário na caixa de chat fixa
+    if question := st.chat_input("Pergunte ao Mestre..."):
+        # 3. Processa o input
+        # O modo é pego da sidebar (ou de onde estiver) no momento da submissão
+        mode = st.session_state.get(
+            "mode_selection", "Consultor de Regras"
+        )  # Pega o modo atual
+        handle_user_input(question, mode)
+        # 4. Re-executa o script para exibir a nova mensagem
+        st.rerun()
 
-        if submitted and question:
-            handle_user_input(question, mode)
+    # Exibe as fontes da última resposta
+    if st.session_state.sources:
+        with st.expander("Fontes Consultadas"):
+            for doc in st.session_state.sources:
+                st.info(f"Fonte (Página aproximada): {doc.metadata.get('page', 'N/A')}")
+                st.text(f"...{doc.page_content}...")
 
     with st.sidebar:
         st.subheader("Seus Livros de Regras")
@@ -190,6 +189,12 @@ def main():
                     st.success("O conhecimento foi absorvido.")
             else:
                 st.warning("Você precisa carregar pelo menos um PDF.")
+            st.subheader("Modo do Assistente")
+            st.radio(
+                "Escolha como o Mestre deve agir:",
+                ("Consultor de Regras", "Mestre Guia"),
+                key="mode_selection",
+            )
 
 
 if __name__ == "__main__":
