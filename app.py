@@ -158,8 +158,11 @@ def main():
             ("Consultor de Regras", "Mestre Guia"),
             key="mode_selection",
         )
-        question = st.text_input(
-            "Pergunte sobre as regras ou peça uma ideia ao Mestre:", key="user_input"
+        question = st.text_area(
+            "Sua pergunta:",
+            placeholder="Pergunte sobre as regras ou peça uma ideia ao Mestre...",
+            height=100,
+            key="user_input",
         )
 
         submitted = st.form_submit_button("Enviar")

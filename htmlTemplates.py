@@ -1,5 +1,16 @@
-css = '''
+css = """
 <style>
+/* Esconde o menu de hambúrguer e o indicador de status */
+#MainMenu {
+    visibility: hidden;
+}
+
+/* Esconde o rodapé "Made with Streamlit" */
+footer {
+    visibility: hidden;
+}
+
+/* Estilos do chat (já existentes) */
 .chat-message {
     padding: 1.5rem; border-radius: 0.5rem; margin-bottom: 1rem; display: flex
 }
@@ -23,22 +34,22 @@ css = '''
   padding: 0 1.5rem;
   color: #fff;
 }
-'''
+"""
 
-bot_template = '''
+bot_template = """
 <div class="chat-message bot">
     <div class="avatar">
         <img src="https://i.ibb.co/cN0nmSj/Screenshot-2023-05-28-at-02-37-21.png">
     </div>
     <div class="message">{{MSG}}</div>
 </div>
-'''
+"""
 
-user_template = '''
+user_template = """
 <div class="chat-message user">
     <div class="avatar">
         <img src="https://i.ibb.co/rdZC7LZ/Photo-logo-1.png">
     </div>    
     <div class="message">{{MSG}}</div>
 </div>
-'''
+"""
