@@ -130,7 +130,7 @@ def main():
     st.set_page_config(page_title="Mestre de RPG com IA", page_icon=":dragon_face:")
     st.write(css, unsafe_allow_html=True)
 
-    # Inicializa todas as chaves necessárias
+    # Session state
     if "conversation" not in st.session_state:
         st.session_state.conversation = None
     if "chat_history" not in st.session_state:
@@ -140,9 +140,9 @@ def main():
 
     # Carrega modelos apenas uma vez
     if "embeddings" not in st.session_state:
-        with st.spinner("Carregando modelo de embeddings (pode levar um tempo)..."):
+        with st.spinner("Carregando modelo de embeddings..."):
             st.session_state.embeddings = HuggingFaceEmbeddings(
-                model_name="hkunlp/instructor-large",  # large para melhor performance de recuperação
+                model_name="hkunlp/instructor-large",
                 model_kwargs={"device": "cpu"},
             )
     if "llm" not in st.session_state:
@@ -151,15 +151,21 @@ def main():
 
     st.header("Mestre de RPG com IA :dragon_face:")
 
-    mode = st.radio(
-        "Escolha o modo do assistente:",
-        ("Consultor de Regras", "Mestre Guia"),
-        key="mode_selection",
-    )
+    # Formulario do Chat
+    with st.form("chat_form", clear_on_submit=True):
+        mode = st.radio(
+            "Escolha o modo do assistente:",
+            ("Consultor de Regras", "Mestre Guia"),
+            key="mode_selection",
+        )
+        question = st.text_input(
+            "Pergunte sobre as regras ou peça uma ideia ao Mestre:", key="user_input"
+        )
 
-    question = st.text_input("Pergunte sobre as regras ou peça uma ideia ao Mestre:")
-    if question:
-        handle_user_input(question, mode)
+        submitted = st.form_submit_button("Enviar")
+
+        if submitted and question:
+            handle_user_input(question, mode)
 
     with st.sidebar:
         st.subheader("Seus Livros de Regras")
@@ -169,23 +175,16 @@ def main():
 
         if st.button("Processar"):
             if pdf_files:
-                with st.spinner("Analisando os tomos antigos... (Processando PDFs)"):
-                    # Extrair o texto
+                with st.spinner("Analisando os tomos antigos..."):
                     raw_text = get_pdf_text(pdf_files)
-
-                    # Obter os chunks de texto
                     text_chunks = get_text_chunks(raw_text)
-
-                    # Criar e persistir o vector store no session_state
                     st.session_state.vector_store = get_vector_store(
                         text_chunks, st.session_state.embeddings
                     )
-
-                    # Criar a cadeia de conversação usando o vector_store do session_state
                     st.session_state.conversation = get_conversation_chain(
                         st.session_state.vector_store, st.session_state.llm
                     )
-                    st.success("O conhecimento foi absorvido. Pode perguntar.")
+                    st.success("O conhecimento foi absorvido.")
             else:
                 st.warning("Você precisa carregar pelo menos um PDF.")
 
