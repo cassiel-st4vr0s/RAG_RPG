@@ -11,3 +11,5 @@ InstructorEmbedding
 sentence-transformers
 torch
 accelerate
+ragas
+datasets

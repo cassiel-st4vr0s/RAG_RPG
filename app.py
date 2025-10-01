@@ -7,8 +7,7 @@ from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_huggingface import HuggingFaceEmbeddings
-
-# from htmlTemplates import bot_template, user_template, css
+import torch
 import os
 import logging
 
@@ -19,6 +18,9 @@ logging.basicConfig(
 
 # Diretório do banco de dados vetorial
 CHROMA_DB_DIRECTORY = "chroma_db_rpg"
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+logging.info(f"Usando o dispositivo: {device}")
 
 
 def load_llm():
@@ -79,7 +81,7 @@ def get_conversation_chain(vector_store, llm):
     conversation_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=vector_store.as_retriever(
-            search_kwargs={"k": 5}
+            search_kwargs={"k": 8}
         ),  # Aumenta o número de docs recuperados
         memory=memory,
         return_source_documents=True,
@@ -102,7 +104,7 @@ def handle_user_input(question, mode):
 
     logging.info(f"Processando pergunta no modo '{mode}': {question}")
 
-    # Adicionamos a pergunta atual ao histórico antes de obter a resposta
+    # A pergunta atual é adicionada ao histórico antes de obter a resposta
     st.session_state.chat_history.append({"role": "user", "content": question})
 
     # Invoca a cadeia para obter a resposta do bot
@@ -120,7 +122,18 @@ def handle_user_input(question, mode):
 
 def main():
     load_dotenv()
-    st.set_page_config(page_title="Mestre de RPG com IA", page_icon=":dragon_face:")
+    st.set_page_config(page_title="Assistente de IA para RPG", page_icon=":dragon_face:")
+
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] {
+            width: 400px !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # Session state
     if "conversation" not in st.session_state:
@@ -137,45 +150,47 @@ def main():
         with st.spinner("Carregando modelo de embeddings..."):
             st.session_state.embeddings = HuggingFaceEmbeddings(
                 model_name="hkunlp/instructor-large",
-                model_kwargs={"device": "cpu"},
+                model_kwargs={"device": device}, 
             )
     if "llm" not in st.session_state:
         with st.spinner("Conectando ao Mestre... (Google Gemini)"):
             st.session_state.llm = load_llm()
 
-    st.header("Mestre de RPG com IA :dragon_face:")
-
-    # --- LÓGICA DE EXIBIÇÃO DO CHAT NATIVO ---
-    # 1. Exibe as mensagens existentes do histórico
-    for message in st.session_state.chat_history:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    # 2. Aguarda por um novo input do usuário na caixa de chat fixa
-    if question := st.chat_input("Pergunte ao Mestre..."):
-        # 3. Processa o input
-        # O modo é pego da sidebar (ou de onde estiver) no momento da submissão
-        mode = st.session_state.get(
-            "mode_selection", "Consultor de Regras"
-        )  # Pega o modo atual
-        handle_user_input(question, mode)
-        # 4. Re-executa o script para exibir a nova mensagem
-        st.rerun()
-
-    # Exibe as fontes da última resposta
-    if st.session_state.sources:
-        with st.expander("Fontes Consultadas"):
-            for doc in st.session_state.sources:
-                st.info(f"Fonte (Página aproximada): {doc.metadata.get('page', 'N/A')}")
-                st.text(f"...{doc.page_content}...")
-
     with st.sidebar:
+        st.header("Configurações")
         st.subheader("Seus Livros de Regras")
+
+        with st.expander("Dicas e Sugestões de Fontes"):
+            st.markdown("""
+            **Para obter os melhores resultados, forneça ao assistente um bom material de base!**
+
+            ---
+            
+            #### O que é uma boa "Fonte"?
+            Um PDF que seja **baseado em texto** e bem organizado. O assistente lê o texto do documento, então ele não funciona com PDFs que são apenas imagens de páginas escaneadas.
+            
+            *   **Ideal:** Livros de regras oficiais em PDF, onde você consegue copiar e colar o texto.
+            *   **Não Funciona:** Um PDF criado a partir de fotos tiradas do livro físico.
+
+            ---
+
+            #### Sugestões de Fontes para RPG
+            
+            1.  **SRD (System Reference Document):**
+                *   Esta é a **melhor opção para começar**. SRDs são documentos com as regras essenciais de um sistema.
+            2.  **Livros Digitais que Você Possui:**
+                *   Se você comprou livros em formato PDF, eles são perfeitos para usar aqui.
+            3.  **Seu Próprio Material (Homebrew):**
+                *   Tem um documento com suas próprias regras, monstros ou itens mágicos? Carregue-o para que o assistente conheça suas criações!
+
+            **Dica:** Carregue múltiplos PDFs do mesmo sistema para dar ao assistente um conhecimento ainda mais completo!
+            """)
+
         pdf_files = st.file_uploader(
-            "Carregue seus PDFs e clique em 'Processar'", accept_multiple_files=True
+            "Carregue seus PDFs aqui", accept_multiple_files=True
         )
 
-        if st.button("Processar"):
+        if st.button("Processar Documentos"):
             if pdf_files:
                 with st.spinner("Analisando os tomos antigos..."):
                     raw_text = get_pdf_text(pdf_files)
@@ -189,12 +204,40 @@ def main():
                     st.success("O conhecimento foi absorvido.")
             else:
                 st.warning("Você precisa carregar pelo menos um PDF.")
+        
+        st.divider()
+
+        if "conversation" in st.session_state and st.session_state.conversation is not None:
             st.subheader("Modo do Assistente")
             st.radio(
-                "Escolha como o Mestre deve agir:",
+                "Escolha como o assistente deve agir:",
                 ("Consultor de Regras", "Mestre Guia"),
                 key="mode_selection",
             )
+
+
+    # ---Chat---
+    st.header("Assistente de IA para RPG :dragon_face:")
+
+    # Exibe as mensagens existentes do histórico
+    for message in st.session_state.chat_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Aguarda por um novo input do usuário
+    if question := st.chat_input("Pergunte ao assistente..."):
+        mode = st.session_state.get(
+            "mode_selection", "Consultor de Regras"
+        )
+        handle_user_input(question, mode)
+        st.rerun()
+
+    # Exibe as fontes da última resposta (se houver)
+    if st.session_state.sources:
+        with st.expander("Fontes Consultadas"):
+            for doc in st.session_state.sources:
+                st.info(f"Fonte (Página aproximada): {doc.metadata.get('page', 'N/A')}")
+                st.text(f"...{doc.page_content}...")
 
 
 if __name__ == "__main__":
